@@ -1,0 +1,19 @@
+{
+	"kilter_board": {
+		"rows": 12,
+		"cols": 12,
+		"default_angle": 40,
+		"states": {
+			"0": "unlit",
+			"1": "start",
+			"2": "hand_foot",
+			"3": "foot_only",
+			"4": "finish"
+		}
+	},
+	"training_settings": {
+		"include_wall_state": true,
+		"one_hot_encoded": true,
+		"route_folder": "./routes"
+	}
+}
