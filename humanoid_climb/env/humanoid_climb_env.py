@@ -190,6 +190,35 @@ class HumanoidClimbEnv(gym.Env):
         )
         return weighted_height / total_mass
 
+    def _attach_initial_stance(self):
+        initial_stance_index = 0
+        for idx, stance in enumerate(self.motion_path):
+            if any(hold != -1 for hold in stance):
+                initial_stance_index = idx
+                break
+
+        self.desired_stance_index = initial_stance_index
+        self.desired_stance = self.motion_path[initial_stance_index]
+        self.climber.exclude_targets = self.motion_exclude_targets[
+            initial_stance_index
+        ]
+
+        for eff_index, hold_key in enumerate(self.desired_stance):
+            if hold_key in (-1, None):
+                continue
+            if eff_index >= len(self.climber.effectors):
+                continue
+            self.climber.force_attach(
+                eff_index=eff_index,
+                target_key=hold_key,
+                force=5000,
+                attach_pos=self.climber.effectors[
+                    eff_index
+                ].current_position(),
+            )
+
+        self.current_stance = list(self.climber.effector_attached_to)
+
     def _decode_action(self, action):
         if self.discrete_grasp:
             action = np.asarray(action)
@@ -312,17 +341,15 @@ class HumanoidClimbEnv(gym.Env):
         super().reset(seed=seed)
 
         self.climber.reset()
-        self.climber.exclude_targets = self.motion_exclude_targets[0]
         self.steps = 0
         self._grasp_lock_remaining = [0, 0, 0, 0]
         self._last_grasp_binary = [0, 0, 0, 0]
         self.current_stance = [-1, -1, -1, -1]
-        self.desired_stance_index = 0
         self.motion_path = [
             self.config.stance_path[stance]["desired_holds"]
             for stance in self.config.stance_path
         ]
-        self.desired_stance = self.motion_path[0]
+        self._attach_initial_stance()
         self.best_dist_to_stance = self.get_distance_from_desired_stance()
         self.prevheight = self.get_com_height()
         self.previous_height = self.prevheight

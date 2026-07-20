@@ -5,21 +5,17 @@ import time
 from typing import Optional
 
 import gymnasium as gym
+from gymnasium.wrappers import RecordVideo
 import humanoid_climb.stances as stances
 import numpy as np
 import pybullet as p
 import stable_baselines3 as sb
 import torch
-from gymnasium.wrappers import FlattenObservation
 from humanoid_climb.climbing_config import ClimbingConfig
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import (
-    SubprocVecEnv,
-    VecFrameStack,
-    VecVideoRecorder,
-)
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 import wandb
 from wandb.integration.sb3 import WandbCallback
@@ -48,6 +44,105 @@ class CustomCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         self.rollout_count += 1
         self.logger.record("climb/rollout_count", self.rollout_count)
+
+
+class VideoRecorderCallback(BaseCallback):
+    """
+    Callback that uses Gymnasium's RecordVideo wrapper combined with
+    a front-facing PyBullet camera render patch to capture evaluation runs.
+    """
+
+    def __init__(
+        self,
+        eval_freq: int,
+        video_folder: str,
+        max_ep_steps: int = 600,
+        verbose: int = 0,
+    ):
+        super().__init__(verbose)
+        self.eval_freq = eval_freq
+        self.video_folder = video_folder
+        self.max_ep_steps = max_ep_steps
+        self.last_eval_step = -1
+        os.makedirs(video_folder, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        # Trigger on step 0 (first iteration) and every eval_freq steps
+        if self.num_timesteps == 0 or (
+            self.num_timesteps - self.last_eval_step >= self.eval_freq
+        ):
+            self.last_eval_step = self.num_timesteps
+            self._record_video()
+        return True
+
+    def _record_video(self):
+        print(
+            f"\n--- [VideoRecorder] Recording evaluation video at step {self.num_timesteps} ---"
+        )
+        config = ClimbingConfig("./config.json")
+
+        base_env = gym.make(
+            "HumanoidClimb-v0",
+            render_mode="rgb_array",
+            max_ep_steps=self.max_ep_steps,
+            config=config,
+        )
+
+        # --- FRONT-FACING CAMERA PATCH (MOVED BACK) ---
+        def custom_render():
+            width, height = 640, 480
+            view_matrix = p.computeViewMatrix(
+                cameraEyePosition=[
+                    -3.5,
+                    0,
+                    1.5,
+                ],  # Moved further back to get a wider view
+                cameraTargetPosition=[0, 0, 1.5],
+                cameraUpVector=[0, 0, 1],
+            )
+            proj_matrix = p.computeProjectionMatrixFOV(
+                fov=60,
+                aspect=float(width) / height,
+                nearVal=0.1,
+                farVal=100.0,
+            )
+            _, _, rgba, _, _ = p.getCameraImage(
+                width,
+                height,
+                viewMatrix=view_matrix,
+                projectionMatrix=proj_matrix,
+                renderer=p.ER_TINY_RENDERER,
+            )
+            return np.reshape(rgba, (height, width, 4))[:, :, :3].astype(
+                np.uint8
+            )
+
+        base_env.render = custom_render
+        # ---------------------------------------------
+
+        eval_env = RecordVideo(
+            base_env,
+            video_folder=self.video_folder,
+            episode_trigger=lambda e: True,
+            name_prefix=f"eval-step-{self.num_timesteps}",
+        )
+
+        obs, info = eval_env.reset()
+        done = False
+        truncated = False
+        total_reward = 0
+        steps = 0
+
+        while not (done or truncated):
+            action, _ = self.model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = eval_env.step(action)
+            total_reward += reward
+            steps += 1
+
+        eval_env.close()
+        print(
+            f"--- [VideoRecorder] Video saved successfully! Reward: {total_reward:.2f}, Steps: {steps} ---\n"
+        )
 
 
 def make_env(
@@ -83,15 +178,17 @@ def make_env(
 def train(env_name, sb3_algo, workers, path_to_model=None):
     config = {
         "policy_type": "MlpPolicy",
-        "total_timesteps": 1000000,
+        "total_timesteps": 50000000,
         "env_name": env_name,
     }
+
     run = wandb.init(
         project="HumanoidClimb-v3",
         config=config,
         sync_tensorboard=True,
         monitor_gym=False,
         save_code=False,
+        mode="offline",
     )
 
     max_ep_steps = 600
@@ -115,42 +212,11 @@ def train(env_name, sb3_algo, workers, path_to_model=None):
 
     save_path = f"{model_dir}/{run.id}"
 
-    # 2. Isolated visual evaluation worker
-    eval_env_raw = SubprocVecEnv(
-        [
-            make_env(
-                env_name,
-                workers + 1,
-                max_steps=max_ep_steps,
-                stance=stance,
-                render_mode="rgb_array",
-            )
-        ],
-        start_method="spawn",
-    )
-
-    # 3. Video recorder wrapper tracking the evaluation environment (Saves directly to local ./videos)
-    eval_env = VecVideoRecorder(
-        eval_env_raw,
-        video_folder=video_dir,
-        record_video_trigger=lambda step: step == 0,
-        video_length=max_ep_steps,
-        name_prefix=f"eval-run-{run.id}",
-    )
-
-    # Calculate callback execution frequency to run every 50,000 global environment steps
-    video_freq = max(1, 50000 // workers)
-
-    # 4. Bind the recorder environment to the evaluation callback
-    eval_callback = EvalCallback(
-        eval_env,
-        best_model_save_path=f"{save_path}/models/",
-        log_path=f"{save_path}/logs/",
-        eval_freq=video_freq,
-        deterministic=True,
-        render=False,
-    )
+    # 2. Initialize callbacks including our clean RecordVideo callback
     cust_callback = CustomCallback()
+    video_callback = VideoRecorderCallback(
+        eval_freq=50000, video_folder=video_dir, max_ep_steps=max_ep_steps
+    )
 
     if sb3_algo == "PPO":
         if path_to_model is None:
@@ -189,7 +255,7 @@ def train(env_name, sb3_algo, workers, path_to_model=None):
                 model_save_path=save_path,
                 verbose=2,
             ),
-            eval_callback,
+            video_callback,
             cust_callback,
         ],
     )
