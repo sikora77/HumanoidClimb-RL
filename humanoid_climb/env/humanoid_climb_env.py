@@ -1,14 +1,14 @@
+import json
+import os
+
 import gymnasium as gym
 import numpy as np
 import pybullet as p
 import pybullet_data
-import json
-import os
-
-from typing import Optional
 from pybullet_utils.bullet_client import BulletClient
-from humanoid_climb.assets.humanoid import Humanoid
+
 from humanoid_climb.assets.asset import Asset
+from humanoid_climb.assets.humanoid import Humanoid
 from humanoid_climb.curriculum import Curriculum
 
 FINISH_ROLE = 14
@@ -23,9 +23,9 @@ class HumanoidClimbEnv(gym.Env):
     def __init__(
         self,
         config,
-        render_mode: Optional[str] = None,
-        max_ep_steps: Optional[int] = 602,
-        state_file: Optional[str] = None,
+        render_mode: str | None = None,
+        max_ep_steps: int | None = 602,
+        state_file: str | None = None,
         discrete_grasp: bool = False,
         n_torque_bins: int = 21,
         grasp_reward: bool = False,
@@ -38,7 +38,14 @@ class HumanoidClimbEnv(gym.Env):
         self.max_ep_steps = max_ep_steps
         self.steps = 0
         self.total_env_steps = 0
-        csv_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "routes", "climbs_intermediate.csv")
+        csv_path = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "routes",
+            "climbs_intermediate.csv",
+        )
         self.curriculum = Curriculum(csv_path)
 
         # --- DYNAMIC KILTER BOARD INTEGRATION ---
@@ -62,7 +69,7 @@ class HumanoidClimbEnv(gym.Env):
                 },
                 "training_settings": {
                     "include_wall_state": True,
-                    "one_hot_encoded": true,
+                    "one_hot_encoded": True,
                 },
             }
 
@@ -86,9 +93,7 @@ class HumanoidClimbEnv(gym.Env):
             self.wall_state_dim = 0
         # ----------------------------------------
 
-
-
-        self.init_from_state = False if state_file is None else True
+        self.init_from_state = not state_file is None
         self.state_file = state_file
 
         if self.render_mode == "human":
@@ -141,14 +146,14 @@ class HumanoidClimbEnv(gym.Env):
         self.prevheight = self.get_com_height()
 
         self.debug_stance_text = self._p.addUserDebugText(
-            text=f"",
+            text="",
             textPosition=[0, 0, 0],
             textSize=1,
             lifeTime=0.1,
             textColorRGB=[1.0, 0.0, 1.0],
         )
 
-        self.targets = dict()
+        self.targets = {}
         self._build_route()
         self.climber.targets = self.targets
 
@@ -157,38 +162,41 @@ class HumanoidClimbEnv(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(total_obs_dim,), dtype=np.float32
         )
+
     def _build_route(self):
-        if hasattr(self, 'targets') and self.targets:
+        if hasattr(self, "targets") and self.targets:
             for key in list(self.targets.keys()):
                 self._p.removeBody(self.targets[key].id)
             self.targets.clear()
         else:
-            self.targets = dict()
+            self.targets = {}
 
         route = self.curriculum.get_route(self.total_env_steps)
         self.current_route_info = route
         self.config.hold_grid_mapping = {}
 
-        for hx, hy, role in zip(route['holes_x'], route['holes_y'], route['role_ids']):
+        for hx, hy, role in zip(
+            route["holes_x"], route["holes_y"], route["role_ids"]
+        ):
             key = f"hold_{hx}_{hy}"
             # Unmirrored Y coordinates: hx=8 -> +Y (left), hx=136 -> -Y (right)
             y_phys = (72 - hx) * (2.0 / 144.0)
             # Shift board height up so lowest holds are at 1.6m to prevent straight legs hitting floor
             z_phys = hy * (2.7 / 156.0) + 1.6
-            
+
             hold_cfg = {
                 "asset": "asset_hold",
                 "position": [0.37, y_phys, z_phys],
                 "orientation": [0, 0, 0, 1],
-                "asset_data": self.config.assets.get("asset_hold", {})
+                "asset_data": self.config.assets.get("asset_hold", {}),
             }
-            
+
             self.targets[key] = Asset(self._p, hold_cfg)
-            
+
             self.config.hold_grid_mapping[key] = {
                 "row": min(11, int(hy // 13)),
                 "col": min(11, int((144 - hx) // 12)),
-                "type": role
+                "type": role,
             }
 
     def get_com_height(self):
@@ -207,52 +215,57 @@ class HumanoidClimbEnv(gym.Env):
     def _spawn_on_start_holds(self):
         grid_mapping = getattr(self.config, "hold_grid_mapping", {})
         start_keys = [
-            k for k, v in grid_mapping.items() if v.get("type") == START_ROLE or v.get("type") == 1
+            k
+            for k, v in grid_mapping.items()
+            if v.get("type") == START_ROLE or v.get("type") == 1
         ]
         if not start_keys:
-            sorted_holds = sorted(self.targets.keys(), key=lambda k: self.targets[k].body.initialPosition[2])
+            sorted_holds = sorted(
+                self.targets.keys(),
+                key=lambda k: self.targets[k].body.initialPosition[2],
+            )
             start_keys = sorted_holds[:2]
 
-        target_positions = [self.targets[k].body.initialPosition for k in start_keys]
+        target_positions = [
+            self.targets[k].body.initialPosition for k in start_keys
+        ]
         if len(target_positions) > 0:
             avg_pos = np.mean(target_positions, axis=0)
             # Position torso in front of wall with clearance and below start hold center
             # Agent faces +X by default (arms extend to +0.39). To reach holds at 0.37, base should be at -0.02
             new_base_pos = [-0.02, avg_pos[1], max(0.5, avg_pos[2] - 0.55)]
             self._p.resetBasePositionAndOrientation(
-                self.climber.robot, 
-                new_base_pos, 
-                [0, 0, 0, 1]
+                self.climber.robot, new_base_pos, [0, 0, 0, 1]
             )
-            self._p.resetBaseVelocity(self.climber.robot, [0, 0, 0], [0, 0, 0])
+            self._p.resetBaseVelocity(
+                self.climber.robot, [0, 0, 0], [0, 0, 0]
+            )
 
         # Reset all joint angles to zero so legs hang straight down below pelvis
-        for j_name, joint in self.climber.joints.items():
+        for joint in self.climber.joints.values():
             joint.reset_position(0, 0)
 
         # Sort start holds by Y coordinate (+Y is left side, -Y is right side)
-        sorted_start_keys = sorted(start_keys, key=lambda k: self.targets[k].body.initialPosition[1])
-        
+        sorted_start_keys = sorted(
+            start_keys, key=lambda k: self.targets[k].body.initialPosition[1]
+        )
+
         # Right hand (index 1) -> lowest Y (+Y left, -Y right -> index 0)
         rh_key = sorted_start_keys[0]
         rh_pos = self.targets[rh_key].body.initialPosition
-        rh_part = self.climber.effectors[1]
-        self._p.resetBasePositionAndOrientation(self.climber.robot, new_base_pos, [0, 0, 0, 1])
+        self.climber.effectors[1]
+        self._p.resetBasePositionAndOrientation(
+            self.climber.robot, new_base_pos, [0, 0, 0, 1]
+        )
         self.climber.force_attach(
-            eff_index=1,
-            target_key=rh_key,
-            force=5000,
-            attach_pos=rh_pos
+            eff_index=1, target_key=rh_key, force=5000, attach_pos=rh_pos
         )
 
         # Left hand (index 0) -> highest Y (index -1)
         lh_key = sorted_start_keys[-1]
         lh_pos = self.targets[lh_key].body.initialPosition
         self.climber.force_attach(
-            eff_index=0,
-            target_key=lh_key,
-            force=5000,
-            attach_pos=lh_pos
+            eff_index=0, target_key=lh_key, force=5000, attach_pos=lh_pos
         )
 
         self.current_stance = list(self.climber.effector_attached_to)
@@ -272,11 +285,12 @@ class HumanoidClimbEnv(gym.Env):
             if self._grasp_lock_remaining[i] > 0:
                 intent_binary = self._last_grasp_binary[i]
                 self._grasp_lock_remaining[i] -= 1
-            elif self.grasp_persist_steps > 0 and intent_binary != self._last_grasp_binary[i]:
+            elif (
+                self.grasp_persist_steps > 0
+                and intent_binary != self._last_grasp_binary[i]
+            ):
                 self._last_grasp_binary[i] = intent_binary
-                self._grasp_lock_remaining[i] = (
-                    self.grasp_persist_steps - 1
-                )
+                self._grasp_lock_remaining[i] = self.grasp_persist_steps - 1
             decoded[17 + i] = 1.0 if intent_binary == 1 else -1.0
 
         return decoded
@@ -321,21 +335,33 @@ class HumanoidClimbEnv(gym.Env):
         )
 
         grid_mapping = getattr(self.config, "hold_grid_mapping", {})
-        finish_keys = [k for k, v in grid_mapping.items() if v.get("type") == FINISH_ROLE or v.get("type") == 4]
-        finish_indices = [int(k.split("_")[1]) for k in finish_keys if "_" in k]
+        finish_keys = [
+            k
+            for k, v in grid_mapping.items()
+            if v.get("type") == FINISH_ROLE or v.get("type") == 4
+        ]
+        finish_indices = [
+            int(k.split("_")[1]) for k in finish_keys if "_" in k
+        ]
 
         left_hand_hold = self.current_stance[0]
         right_hand_hold = self.current_stance[1]
 
-        lh_on_finish = (left_hand_hold in finish_keys) or (left_hand_hold in finish_indices)
-        rh_on_finish = (right_hand_hold in finish_keys) or (right_hand_hold in finish_indices)
+        lh_on_finish = (left_hand_hold in finish_keys) or (
+            left_hand_hold in finish_indices
+        )
+        rh_on_finish = (right_hand_hold in finish_keys) or (
+            right_hand_hold in finish_indices
+        )
 
         if lh_on_finish and rh_on_finish and len(finish_keys) > 0:
             giant_finish_reward = 2500.0
             reward += giant_finish_reward
             terminated = True
             info["is_success"] = True
-            print(f"--- ROUTE TOPPED OUT! Giant reward of +{giant_finish_reward} applied. ---")
+            print(
+                f"--- ROUTE TOPPED OUT! Giant reward of +{giant_finish_reward} applied. ---"
+            )
         else:
             terminated = self.terminate_check()
 
@@ -351,23 +377,25 @@ class HumanoidClimbEnv(gym.Env):
         self._grasp_lock_remaining = [30, 30, 0, 0]
         self._last_grasp_binary = [1, 1, -1, -1]
         self.current_stance = [-1, -1, -1, -1]
-        
+
         self._build_route()
         self.climber.targets = self.targets
-        
+
         self._spawn_on_start_holds()
-        
+
         # 100-step calming phase: damp base velocity and apply zero action to reach static equilibrium
         # Make sure grasp commands keep hands attached (17, 18) and feet detached (19, 20) during reset
         calm_action = np.zeros(self.action_space.shape, dtype=np.float32)
         calm_action[17:19] = 1.0
         calm_action[19:21] = -1.0
-        
+
         for _ in range(100):
             self.climber.apply_action(calm_action)
-            self._p.resetBaseVelocity(self.climber.robot, [0, 0, 0], [0, 0, 0])
+            self._p.resetBaseVelocity(
+                self.climber.robot, [0, 0, 0], [0, 0, 0]
+            )
             self._p.stepSimulation()
-            
+
         self.update_stance()
 
         self.prevheight = self.get_com_height()
@@ -382,11 +410,11 @@ class HumanoidClimbEnv(gym.Env):
         com_height = self.get_com_height()
         height_reward = max(0, com_height - self.prevheight) * 10
         self.prevheight = com_height
-        
+
         reward = height_reward
         if self.is_on_floor():
             reward -= 10
-            
+
         return reward
 
     def calculate_improved_reward(self):
@@ -489,7 +517,9 @@ class HumanoidClimbEnv(gym.Env):
         self.current_stance = self.climber.effector_attached_to
 
         grid_mapping = getattr(self.config, "hold_grid_mapping", {})
-        attached_holds = set([h for h in self.current_stance if h != -1 and h in self.targets])
+        attached_holds = {
+            h for h in self.current_stance if h != -1 and h in self.targets
+        }
 
         for key, asset in self.targets.items():
             if key in attached_holds:
@@ -498,18 +528,21 @@ class HumanoidClimbEnv(gym.Env):
             else:
                 hold_type = grid_mapping.get(key, {}).get("type", 0)
                 if hold_type == START_ROLE or hold_type == 1:
-                    color = [0.0, 0.7, 1.0, 0.85]   # Cyan for Start holds
+                    color = [0.0, 0.7, 1.0, 0.85]  # Cyan for Start holds
                 elif hold_type == FINISH_ROLE or hold_type == 4:
-                    color = [1.0, 0.2, 0.2, 0.85]   # Red for Finish holds
+                    color = [1.0, 0.2, 0.2, 0.85]  # Red for Finish holds
                 elif hold_type == FOOT_ROLE or hold_type == 15:
-                    color = [1.0, 0.8, 0.0, 0.85]   # Orange/Yellow for Foot holds
+                    color = [
+                        1.0,
+                        0.8,
+                        0.0,
+                        0.85,
+                    ]  # Orange/Yellow for Foot holds
                 else:
-                    color = [0.4, 0.4, 0.4, 0.75]   # Grey for Middle holds
+                    color = [0.4, 0.4, 0.4, 0.75]  # Grey for Middle holds
 
             self._p.changeVisualShape(
-                objectUniqueId=asset.id,
-                linkIndex=-1,
-                rgbaColor=color
+                objectUniqueId=asset.id, linkIndex=-1, rgbaColor=color
             )
 
     def get_distance_from_desired_stance(self):
@@ -537,27 +570,40 @@ class HumanoidClimbEnv(gym.Env):
         return dist_away
 
     def terminate_check(self):
-        if self.is_on_floor():
-            return True
-        return False
+        return bool(self.is_on_floor())
 
     def truncate_check(self):
-        return True if self.steps >= self.max_ep_steps else False
+        return self.steps >= self.max_ep_steps
 
     def _get_obs(self):
         obs = []
 
         states = self._p.getLinkStates(
             self.climber.robot,
-            linkIndices=[joint.jointIndex for joint in self.climber.ordered_joints],
+            linkIndices=[
+                joint.jointIndex for joint in self.climber.ordered_joints
+            ],
             computeLinkVelocity=1,
         )
 
         for state in states:
-            worldPos, worldOri, localInertialPos, _, _, _, linearVel, angVel = state
-            obs.extend(worldPos + worldOri + localInertialPos + linearVel + angVel)
+            (
+                worldPos,
+                worldOri,
+                localInertialPos,
+                _,
+                _,
+                _,
+                linearVel,
+                angVel,
+            ) = state
+            obs.extend(
+                worldPos + worldOri + localInertialPos + linearVel + angVel
+            )
 
-        eff_positions = [eff.current_position() for eff in self.climber.effectors]
+        eff_positions = [
+            eff.current_position() for eff in self.climber.effectors
+        ]
         for pos in eff_positions:
             obs.extend(pos)
 
@@ -570,30 +616,46 @@ class HumanoidClimbEnv(gym.Env):
             return baseline_vector
 
         if self.one_hot:
-            grid_state = np.zeros((self.kilter_rows, self.kilter_cols, self.num_states), dtype=np.float32)
-            grid_state[:, :, 0] = 1.0 
-            for key, hold_asset in self.targets.items():
-                if hasattr(self.config, "hold_grid_mapping") and key in self.config.hold_grid_mapping:
+            grid_state = np.zeros(
+                (self.kilter_rows, self.kilter_cols, self.num_states),
+                dtype=np.float32,
+            )
+            grid_state[:, :, 0] = 1.0
+            for key in self.targets:
+                if (
+                    hasattr(self.config, "hold_grid_mapping")
+                    and key in self.config.hold_grid_mapping
+                ):
                     r = self.config.hold_grid_mapping[key]["row"]
                     c = self.config.hold_grid_mapping[key]["col"]
-                    state_idx = self.config.hold_grid_mapping[key].get("type", 0)
-                    if state_idx >= self.num_states: state_idx = 0
+                    state_idx = self.config.hold_grid_mapping[key].get(
+                        "type", 0
+                    )
+                    if state_idx >= self.num_states:
+                        state_idx = 0
                     grid_state[r, c, 0] = 0.0
                     grid_state[r, c, state_idx] = 1.0
             flat_wall = grid_state.flatten()
         else:
-            grid_state = np.zeros((self.kilter_rows, self.kilter_cols), dtype=np.float32)
-            for key, hold_asset in self.targets.items():
-                if hasattr(self.config, "hold_grid_mapping") and key in self.config.hold_grid_mapping:
+            grid_state = np.zeros(
+                (self.kilter_rows, self.kilter_cols), dtype=np.float32
+            )
+            for key in self.targets:
+                if (
+                    hasattr(self.config, "hold_grid_mapping")
+                    and key in self.config.hold_grid_mapping
+                ):
                     r = self.config.hold_grid_mapping[key]["row"]
                     c = self.config.hold_grid_mapping[key]["col"]
-                    grid_state[r, c] = self.config.hold_grid_mapping[key].get("type", 0)
+                    grid_state[r, c] = self.config.hold_grid_mapping[key].get(
+                        "type", 0
+                    )
             flat_wall = grid_state.flatten()
 
         return np.concatenate([baseline_vector, flat_wall]).astype(np.float32)
 
     def _get_info(self):
-        info = dict()
+        info = {}
         info["is_success"] = False
         return info
 
@@ -644,7 +706,9 @@ class HumanoidClimbEnv(gym.Env):
                 projectionMatrix=proj_matrix,
                 renderer=p.ER_TINY_RENDERER,
             )
-            return np.reshape(rgba, (height, width, 4))[:, :, :3].astype(np.uint8)
+            return np.reshape(rgba, (height, width, 4))[:, :, :3].astype(
+                np.uint8
+            )
 
     def visualise_reward(self, reward, min, max):
         if self.render_mode != "human":

@@ -1,9 +1,8 @@
+import os
 import random
-from typing import List
 
 import numpy as np
 import pybullet as p
-import os
 
 from humanoid_climb.assets.robot_util import *
 
@@ -143,8 +142,7 @@ class Humanoid:
             attach_pos = [0, 0, 0]
 
         eff_part = self.effectors[eff_index]
-        eff_pos = eff_part.current_position()
-        target_pos = target.body.initialPosition
+        eff_part.current_position()
 
         constraint = self._p.createConstraint(
             parentBodyUniqueId=self.robot,

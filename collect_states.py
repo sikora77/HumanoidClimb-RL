@@ -1,14 +1,12 @@
-import random
 
-import pybullet as p
-import stable_baselines3 as sb
+import time
+
 import gymnasium as gym
 import numpy as np
-import time
-import torso_climb
-import humanoid_climb
-import humanoid_climb.stances as stances
-from torso_climb.env.torso_climb_env import Reward
+import pybullet as p
+import stable_baselines3 as sb
+
+from humanoid_climb import stances
 
 NUM_SAMPLES = 1000
 

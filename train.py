@@ -1,23 +1,21 @@
 import argparse
-import json
 import os
-import time
-from typing import Optional
 
 import gymnasium as gym
-from gymnasium.wrappers import RecordVideo
-import humanoid_climb.stances as stances
-import numpy as np
 import pybullet as p
 import stable_baselines3 as sb
 import torch
+import wandb
+from gymnasium.wrappers import RecordVideo
+from humanoid_climb import stances
 from humanoid_climb.climbing_config import ClimbingConfig
-from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+from stable_baselines3.common.callbacks import (
+    BaseCallback,
+    CheckpointCallback,
+)
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv
-
-import wandb
 from wandb.integration.sb3 import WandbCallback
 
 # Set up CUDA device
@@ -34,11 +32,19 @@ os.makedirs(video_dir, exist_ok=True)
 
 
 class CustomCallback(BaseCallback):
-    def __init__(self, verbose: int = 0):
+    def __init__(self, save_path: str, verbose: int = 0):
         super().__init__(verbose)
         self.rollout_count = 0
+        self.save_path = save_path
+        self._saved_initial = False
 
     def _on_step(self) -> bool:
+        if not self._saved_initial:
+            print(
+                f"--- [CustomCallback] Saving initial model at step {self.num_timesteps} to {self.save_path}/rl_model_initial.zip ---"
+            )
+            self.model.save(f"{self.save_path}/rl_model_initial.zip")
+            self._saved_initial = True
         return True
 
     def _on_rollout_end(self) -> None:
@@ -95,13 +101,15 @@ class VideoRecorderCallback(BaseCallback):
             name_prefix=f"eval-step-{self.num_timesteps}",
         )
 
-        obs, info = eval_env.reset()
-        
+        obs, _info = eval_env.reset()
+
         route_info = getattr(base_env.unwrapped, "current_route_info", {})
         r_name = route_info.get("name", "Unknown Route")
         r_diff = route_info.get("difficulty", "N/A")
         r_frames = route_info.get("frames", "N/A")
-        print(f"--- [VideoRecorder] Route: '{r_name}' | Difficulty: {r_diff} | Frames: {r_frames} ---")
+        print(
+            f"--- [VideoRecorder] Route: '{r_name}' | Difficulty: {r_diff} | Frames: {r_frames} ---"
+        )
 
         done = False
         truncated = False
@@ -110,7 +118,7 @@ class VideoRecorderCallback(BaseCallback):
 
         while not (done or truncated):
             action, _ = self.model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, info = eval_env.step(action)
+            obs, reward, done, truncated, _info = eval_env.step(action)
             total_reward += reward
             steps += 1
 
@@ -129,7 +137,7 @@ def make_env(
     discrete_grasp: bool = True,
     grasp_reward: bool = True,
     grasp_persist_steps: int = 10,
-    render_mode: Optional[str] = None,
+    render_mode: str | None = None,
 ) -> gym.Env:
     def _init():
         config = ClimbingConfig("./config.json")
@@ -150,7 +158,17 @@ def make_env(
     return _init
 
 
-def train(env_name, sb3_algo, workers, path_to_model=None, use_cpu=False, net_arch=[64, 64], activation="tanh"):
+def train(
+    env_name,
+    sb3_algo,
+    workers,
+    path_to_model=None,
+    use_cpu=False,
+    net_arch=None,
+    activation="tanh",
+):
+    if net_arch is None:
+        net_arch = [64, 64]
     device_obj = torch.device("cpu") if use_cpu else DEVICE
     print(f"Executing training on device: {device_obj}")
 
@@ -193,9 +211,14 @@ def train(env_name, sb3_algo, workers, path_to_model=None, use_cpu=False, net_ar
     save_path = f"{model_dir}/{run.id}"
 
     # 2. Initialize callbacks including our clean RecordVideo callback
-    cust_callback = CustomCallback()
+    cust_callback = CustomCallback(save_path=save_path)
     video_callback = VideoRecorderCallback(
         eval_freq=50000, video_folder=video_dir, max_ep_steps=max_ep_steps
+    )
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(1, 100000 // workers),
+        save_path=save_path,
+        name_prefix="rl_model",
     )
 
     activation_map = {
@@ -205,10 +228,10 @@ def train(env_name, sb3_algo, workers, path_to_model=None, use_cpu=False, net_ar
     }
     act_fn = activation_map.get(activation.lower(), torch.nn.Tanh)
 
-    policy_kwargs = dict(
-        net_arch=dict(pi=net_arch, vf=net_arch),
-        activation_fn=act_fn,
-    )
+    policy_kwargs = {
+        "net_arch": {"pi": net_arch, "vf": net_arch},
+        "activation_fn": act_fn,
+    }
 
     if sb3_algo == "PPO":
         if path_to_model is None:
@@ -245,10 +268,9 @@ def train(env_name, sb3_algo, workers, path_to_model=None, use_cpu=False, net_ar
         callback=[
             WandbCallback(
                 gradient_save_freq=50000,
-                model_save_freq=100000,
-                model_save_path=save_path,
                 verbose=2,
             ),
+            checkpoint_callback,
             video_callback,
             cust_callback,
         ],
@@ -279,7 +301,7 @@ def test(env, sb3_algo, path_to_model, use_cpu=False):
 
     while True:
         action, _state = model.predict(obs, deterministic=True)
-        obs, reward, done, info = vec_env.step(action)
+        obs, reward, done, _info = vec_env.step(action)
         score += reward
         step += 1
 
@@ -310,7 +332,11 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--train", action="store_true")
     parser.add_argument("-f", "--file", required=False, default=None)
     parser.add_argument("-s", "--test", metavar="path_to_model")
-    parser.add_argument("--cpu", action="store_true", help="Force CPU device execution for PPO/SAC")
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU device execution for PPO/SAC",
+    )
     parser.add_argument(
         "--net-arch",
         type=int,
@@ -329,7 +355,7 @@ if __name__ == "__main__":
 
     if args.train:
         if args.file is None:
-            print(f"<< Training from scratch! >>")
+            print("<< Training from scratch! >>")
             train(
                 args.gymenv,
                 args.sb3_algo,
@@ -362,6 +388,8 @@ if __name__ == "__main__":
                 max_ep_steps=max_steps,
                 **stance.get_args(),
             )
-            test(env, args.sb3_algo, path_to_model=args.test, use_cpu=args.cpu)
+            test(
+                env, args.sb3_algo, path_to_model=args.test, use_cpu=args.cpu
+            )
         else:
             print(f"{args.test} not found.")

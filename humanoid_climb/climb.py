@@ -1,8 +1,9 @@
 import os
-import argparse
+
 import gymnasium as gym
 import pybullet as p
 from stable_baselines3 import PPO
+
 from humanoid_climb.climbing_config import ClimbingConfig
 
 config = ClimbingConfig("./config.json")

@@ -1,15 +1,15 @@
 import os
 
-import wandb
-import stable_baselines3 as sb
 import gymnasium as gym
-
-from wandb.integration.sb3 import WandbCallback
+import stable_baselines3 as sb
+from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from humanoid_climb.climbing_config import ClimbingConfig
-from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
+from wandb.integration.sb3 import WandbCallback
+
+import wandb
+from humanoid_climb.climbing_config import ClimbingConfig
 
 # Create env
 

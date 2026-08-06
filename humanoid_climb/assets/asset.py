@@ -1,5 +1,6 @@
 from humanoid_climb.assets.robot_util import *
 
+
 class Asset:
     def __init__(self, bullet_client, config_asset):
         self.id = None

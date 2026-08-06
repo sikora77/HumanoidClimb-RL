@@ -1,12 +1,12 @@
 import numpy as np
-import pybullet_data
 import pybullet as p
+import pybullet_data
 from pybullet_utils import bullet_client
 
 from humanoid_climb.assets.humanoid import Humanoid
 
 
-def draw_x(client, position, size=0.05, color=[1, 0, 0]):
+def draw_x(client, position, size=0.05, color=None):
     """
     Draws an X at the given position in the PyBullet simulation.
 
@@ -16,6 +16,8 @@ def draw_x(client, position, size=0.05, color=[1, 0, 0]):
         size (float, optional): Size of the X. Defaults to 1.0.
         color (list, optional): RGB color list for the X. Defaults to [1, 0, 0] (red).
     """
+    if color is None:
+        color = [1, 0, 0]
     half_size = size / 2.0
     p1 = [position[0] + half_size, position[1] + half_size, position[2]]
     p2 = [position[0] - half_size, position[1] - half_size, position[2]]

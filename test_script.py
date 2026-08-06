@@ -1,6 +1,5 @@
+
 import gymnasium as gym
-import humanoid_climb
-import time
 
 env = gym.make("HumanoidClimb-v0", render_mode="rgb_array")
 obs, info = env.reset()

@@ -1,8 +1,7 @@
-import pybullet
-import pybullet_data
 import pybullet as p
+import pybullet_data
 from pybullet_utils import bullet_client
-from humanoid_climb.assets.humanoid import Humanoid
+
 from humanoid_climb.assets.robot_util import *
 
 client = bullet_client.BulletClient(connection_mode=p.GUI)

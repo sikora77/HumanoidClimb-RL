@@ -1,6 +1,5 @@
 import os
-import sys
-import numpy as np
+
 import gymnasium as gym
 
 from humanoid_climb.climbing_config import ClimbingConfig
@@ -81,7 +80,7 @@ def test_environment():
     for step in range(1, 31):
         # Apply random action (which might include release signals)
         action = env.action_space.sample()
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, terminated, truncated, _info = env.step(action)
         
         curr_attached = unwrapped_env.climber.effector_attached_to
         lh_attached = curr_attached[0] != -1
@@ -108,7 +107,7 @@ def test_environment():
     total_reward = 0
     for step in range(31, 101):
         action = env.action_space.sample()
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, terminated, truncated, _info = env.step(action)
         total_reward += reward
         if terminated or truncated:
             print(f"Episode ended at step {step}")
