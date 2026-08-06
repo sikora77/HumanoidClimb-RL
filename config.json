@@ -122,38 +122,5 @@
 			"position": [0.4, 0, 2.9],
 			"orientation": [0, 0, 0, 1]
 		}
-	},
-
-	"stance_path": {
-		"0": {
-			"desired_holds": [-1, -1, -1, -1],
-			"force_attach": [null, null, null, null],
-			"ignore_holds": [[], [], [], []]
-		},
-		"1": {
-			"desired_holds": ["hold_10", "hold_9", -1, -1],
-			"force_attach": [null, null, null, null],
-			"ignore_holds": [[], [], [], []]
-		},
-		"2": {
-			"desired_holds": ["hold_10", "hold_9", "hold_2", -1],
-			"force_attach": [1, 1, null, null],
-			"ignore_holds": [[], [], [], []]
-		},
-		"3": {
-			"desired_holds": ["hold_10", "hold_9", "hold_2", "hold_1"],
-			"force_attach": [1, 1, 1, null],
-			"ignore_holds": [[], [], [], []]
-		},
-		"4": {
-			"desired_holds": ["hold_18", "hold_18", -1, -1],
-			"force_attach": [null, null, null, null],
-			"ignore_holds": [["hold_10"], ["hold_9"], ["hold_2"], ["hold_1"]]
-		},
-		"5": {
-			"desired_holds": ["hold_18", "hold_18", "hold_10", "hold_9"],
-			"force_attach": [1, 1, null, null],
-			"ignore_holds": [[], [], [], []]
-		}
 	}
 }

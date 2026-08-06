@@ -88,38 +88,6 @@ class VideoRecorderCallback(BaseCallback):
             config=config,
         )
 
-        # --- FRONT-FACING CAMERA PATCH (MOVED BACK) ---
-        def custom_render():
-            width, height = 640, 480
-            view_matrix = p.computeViewMatrix(
-                cameraEyePosition=[
-                    -3.5,
-                    0,
-                    1.5,
-                ],  # Moved further back to get a wider view
-                cameraTargetPosition=[0, 0, 1.5],
-                cameraUpVector=[0, 0, 1],
-            )
-            proj_matrix = p.computeProjectionMatrixFOV(
-                fov=60,
-                aspect=float(width) / height,
-                nearVal=0.1,
-                farVal=100.0,
-            )
-            _, _, rgba, _, _ = p.getCameraImage(
-                width,
-                height,
-                viewMatrix=view_matrix,
-                projectionMatrix=proj_matrix,
-                renderer=p.ER_TINY_RENDERER,
-            )
-            return np.reshape(rgba, (height, width, 4))[:, :, :3].astype(
-                np.uint8
-            )
-
-        base_env.render = custom_render
-        # ---------------------------------------------
-
         eval_env = RecordVideo(
             base_env,
             video_folder=self.video_folder,
@@ -128,6 +96,13 @@ class VideoRecorderCallback(BaseCallback):
         )
 
         obs, info = eval_env.reset()
+        
+        route_info = getattr(base_env.unwrapped, "current_route_info", {})
+        r_name = route_info.get("name", "Unknown Route")
+        r_diff = route_info.get("difficulty", "N/A")
+        r_frames = route_info.get("frames", "N/A")
+        print(f"--- [VideoRecorder] Route: '{r_name}' | Difficulty: {r_diff} | Frames: {r_frames} ---")
+
         done = False
         truncated = False
         total_reward = 0
@@ -175,11 +150,16 @@ def make_env(
     return _init
 
 
-def train(env_name, sb3_algo, workers, path_to_model=None):
+def train(env_name, sb3_algo, workers, path_to_model=None, use_cpu=False, net_arch=[64, 64], activation="tanh"):
+    device_obj = torch.device("cpu") if use_cpu else DEVICE
+    print(f"Executing training on device: {device_obj}")
+
     config = {
         "policy_type": "MlpPolicy",
         "total_timesteps": 50000000,
         "env_name": env_name,
+        "net_arch": net_arch,
+        "activation": activation,
     }
 
     run = wandb.init(
@@ -218,29 +198,43 @@ def train(env_name, sb3_algo, workers, path_to_model=None):
         eval_freq=50000, video_folder=video_dir, max_ep_steps=max_ep_steps
     )
 
+    activation_map = {
+        "tanh": torch.nn.Tanh,
+        "relu": torch.nn.ReLU,
+        "elu": torch.nn.ELU,
+    }
+    act_fn = activation_map.get(activation.lower(), torch.nn.Tanh)
+
+    policy_kwargs = dict(
+        net_arch=dict(pi=net_arch, vf=net_arch),
+        activation_fn=act_fn,
+    )
+
     if sb3_algo == "PPO":
         if path_to_model is None:
             model = sb.PPO(
                 "MlpPolicy",
                 vec_env,
                 verbose=1,
-                device=DEVICE,
+                device=device_obj,
                 tensorboard_log=log_dir,
                 batch_size=64,
+                policy_kwargs=policy_kwargs,
             )
         else:
-            model = sb.PPO.load(path_to_model, env=vec_env)
+            model = sb.PPO.load(path_to_model, env=vec_env, device=device_obj)
     elif sb3_algo == "SAC":
         if path_to_model is None:
             model = sb.SAC(
                 "MlpPolicy",
                 vec_env,
                 verbose=1,
-                device=DEVICE,
+                device=device_obj,
                 tensorboard_log=log_dir,
+                policy_kwargs=policy_kwargs,
             )
         else:
-            model = sb.SAC.load(path_to_model, env=vec_env)
+            model = sb.SAC.load(path_to_model, env=vec_env, device=device_obj)
     else:
         print("Algorithm not found")
         return
@@ -250,8 +244,8 @@ def train(env_name, sb3_algo, workers, path_to_model=None):
         progress_bar=True,
         callback=[
             WandbCallback(
-                gradient_save_freq=5000,
-                model_save_freq=5000,
+                gradient_save_freq=50000,
+                model_save_freq=100000,
                 model_save_path=save_path,
                 verbose=2,
             ),
@@ -262,17 +256,18 @@ def train(env_name, sb3_algo, workers, path_to_model=None):
     run.finish()
 
 
-def test(env, sb3_algo, path_to_model):
+def test(env, sb3_algo, path_to_model, use_cpu=False):
+    device_obj = torch.device("cpu") if use_cpu else DEVICE
     if sb3_algo == "SAC":
-        model = sb.SAC.load(path_to_model, env=env)
+        model = sb.SAC.load(path_to_model, env=env, device=device_obj)
     elif sb3_algo == "TD3":
-        model = sb.TD3.load(path_to_model, env=env)
+        model = sb.TD3.load(path_to_model, env=env, device=device_obj)
     elif sb3_algo == "A2C":
-        model = sb.A2C.load(path_to_model, env=env)
+        model = sb.A2C.load(path_to_model, env=env, device=device_obj)
     elif sb3_algo == "DQN":
-        model = sb.DQN.load(path_to_model, env=env)
+        model = sb.DQN.load(path_to_model, env=env, device=device_obj)
     elif sb3_algo == "PPO":
-        model = sb.PPO.load(path_to_model, env=env)
+        model = sb.PPO.load(path_to_model, env=env, device=device_obj)
     else:
         print("Algorithm not found")
         return
@@ -306,24 +301,54 @@ def test(env, sb3_algo, path_to_model):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train or test model.")
     parser.add_argument(
-        "gymenv", help="Gymnasium environment i.e. Humanoid-v4"
+        "gymenv", help="Gymnasium environment i.e. HumanoidClimb-v0"
     )
     parser.add_argument(
-        "sb3_algo", help="StableBaseline3 RL algorithm i.e. SAC, TD3"
+        "sb3_algo", help="StableBaseline3 RL algorithm i.e. PPO, SAC"
     )
-    parser.add_argument("-w", "--workers", type=int)
+    parser.add_argument("-w", "--workers", type=int, default=1)
     parser.add_argument("-t", "--train", action="store_true")
     parser.add_argument("-f", "--file", required=False, default=None)
     parser.add_argument("-s", "--test", metavar="path_to_model")
+    parser.add_argument("--cpu", action="store_true", help="Force CPU device execution for PPO/SAC")
+    parser.add_argument(
+        "--net-arch",
+        type=int,
+        nargs="+",
+        default=[64, 64],
+        help="Custom layer dimensions for policy & value networks, e.g. --net-arch 256 256",
+    )
+    parser.add_argument(
+        "--activation",
+        type=str,
+        default="tanh",
+        choices=["tanh", "relu", "elu"],
+        help="Activation function for neural network (tanh, relu, elu)",
+    )
     args = parser.parse_args()
 
     if args.train:
         if args.file is None:
             print(f"<< Training from scratch! >>")
-            train(args.gymenv, args.sb3_algo, args.workers)
+            train(
+                args.gymenv,
+                args.sb3_algo,
+                args.workers,
+                use_cpu=args.cpu,
+                net_arch=args.net_arch,
+                activation=args.activation,
+            )
         elif os.path.isfile(args.file):
             print(f"<< Continuing {args.file} >>")
-            train(args.gymenv, args.sb3_algo, args.workers, args.file)
+            train(
+                args.gymenv,
+                args.sb3_algo,
+                args.workers,
+                path_to_model=args.file,
+                use_cpu=args.cpu,
+                net_arch=args.net_arch,
+                activation=args.activation,
+            )
 
     if args.test:
         if os.path.isfile(args.test):
@@ -337,6 +362,6 @@ if __name__ == "__main__":
                 max_ep_steps=max_steps,
                 **stance.get_args(),
             )
-            test(env, args.sb3_algo, path_to_model=args.test)
+            test(env, args.sb3_algo, path_to_model=args.test, use_cpu=args.cpu)
         else:
             print(f"{args.test} not found.")

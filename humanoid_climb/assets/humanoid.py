@@ -74,7 +74,6 @@ class Humanoid:
                 # print(f"{geom} set to group {collision_groups[geom][0]} & mask {collision_groups[geom][1]}")
 
         self.targets = None
-        self.exclude_targets = []
 
     def apply_action(self, a, override=None):
         # Actions are split into joint actions and grasping actions
@@ -139,25 +138,23 @@ class Humanoid:
             self.detach(eff_index)
 
         target = self.targets[target_key]
-        exclude_list = self.exclude_targets[eff_index]
-        if len(exclude_list) > 0:
-            if target_key in exclude_list:
-                return
 
         if attach_pos is None:
             attach_pos = [0, 0, 0]
 
+        eff_part = self.effectors[eff_index]
+        eff_pos = eff_part.current_position()
+        target_pos = target.body.initialPosition
+
         constraint = self._p.createConstraint(
             parentBodyUniqueId=self.robot,
-            parentLinkIndex=self.effectors[eff_index].bodyPartIndex,
+            parentLinkIndex=eff_part.bodyPartIndex,
             childBodyUniqueId=target.id,
             childLinkIndex=-1,
             jointType=p.JOINT_POINT2POINT,
             jointAxis=[0, 0, 0],
             parentFramePosition=[0, 0, 0],
-            childFramePosition=np.subtract(
-                attach_pos, target.body.initialPosition
-            ),
+            childFramePosition=[0, 0, 0]
         )
         self._p.changeConstraint(
             userConstraintUniqueId=constraint, maxForce=force
