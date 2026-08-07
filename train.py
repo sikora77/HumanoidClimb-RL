@@ -15,7 +15,11 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import (
+    SubprocVecEnv,
+    DummyVecEnv,
+    VecNormalize,
+)
 from wandb.integration.sb3 import WandbCallback
 
 # Set up CUDA device
@@ -44,7 +48,18 @@ class CustomCallback(BaseCallback):
                 f"--- [CustomCallback] Saving initial model at step {self.num_timesteps} to {self.save_path}/rl_model_initial.zip ---"
             )
             self.model.save(f"{self.save_path}/rl_model_initial.zip")
+            if hasattr(self.training_env, "save"):
+                self.training_env.save(
+                    f"{self.save_path}/vec_normalize_initial.pkl"
+                )
             self._saved_initial = True
+
+        if self.num_timesteps > 0 and self.num_timesteps % 50000 == 0:
+            if hasattr(self.training_env, "save"):
+                self.training_env.save(
+                    f"{self.save_path}/vec_normalize_{self.num_timesteps}_steps.pkl"
+                )
+
         return True
 
     def _on_rollout_end(self) -> None:
@@ -97,11 +112,19 @@ class VideoRecorderCallback(BaseCallback):
         eval_env = RecordVideo(
             base_env,
             video_folder=self.video_folder,
-            episode_trigger=lambda e: True,
+            episode_trigger=lambda e: e == 0,
             name_prefix=f"eval-step-{self.num_timesteps}",
         )
 
-        obs, _info = eval_env.reset()
+        vec_eval_env = DummyVecEnv([lambda: eval_env])
+        vec_eval_env = VecNormalize(
+            vec_eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0
+        )
+
+        if hasattr(self.training_env, "obs_rms"):
+            vec_eval_env.obs_rms = self.training_env.obs_rms
+
+        obs = vec_eval_env.reset()
 
         route_info = getattr(base_env.unwrapped, "current_route_info", {})
         r_name = route_info.get("name", "Unknown Route")
@@ -112,17 +135,17 @@ class VideoRecorderCallback(BaseCallback):
         )
 
         done = False
-        truncated = False
         total_reward = 0
         steps = 0
 
-        while not (done or truncated):
+        while not done:
             action, _ = self.model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, _info = eval_env.step(action)
-            total_reward += reward
+            obs, reward, done_arr, _info = vec_eval_env.step(action)
+            done = done_arr[0]
+            total_reward += reward[0]
             steps += 1
 
-        eval_env.close()
+        vec_eval_env.close()
         print(
             f"--- [VideoRecorder] Video saved successfully! Reward: {total_reward:.2f}, Steps: {steps} ---\n"
         )
@@ -134,7 +157,7 @@ def make_env(
     seed: int = 0,
     max_steps: int = 1000,
     stance: stances.Stance = stances.STANCE_NONE,
-    discrete_grasp: bool = True,
+    discrete_grasp: bool = False,
     grasp_reward: bool = True,
     grasp_persist_steps: int = 10,
     render_mode: str | None = None,
@@ -168,7 +191,7 @@ def train(
     activation="tanh",
 ):
     if net_arch is None:
-        net_arch = [64, 64]
+        net_arch = [256, 256]
     device_obj = torch.device("cpu") if use_cpu else DEVICE
     print(f"Executing training on device: {device_obj}")
 
@@ -207,6 +230,9 @@ def train(
         ],
         start_method="spawn",
     )
+    vec_env = VecNormalize(
+        vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0
+    )
 
     save_path = f"{model_dir}/{run.id}"
 
@@ -238,15 +264,22 @@ def train(
             model = sb.PPO(
                 "MlpPolicy",
                 vec_env,
-                learning_rate=1e-3,
+                learning_rate=3e-4,
                 verbose=1,
                 device=device_obj,
                 tensorboard_log=log_dir,
-                batch_size=64,
+                batch_size=2048,
+                ent_coef=0.08,
                 policy_kwargs=policy_kwargs,
             )
         else:
-            model = sb.PPO.load(path_to_model, env=vec_env, device=device_obj)
+            custom_objects = {"ent_coef": 0.08}
+            model = sb.PPO.load(
+                path_to_model,
+                env=vec_env,
+                device=device_obj,
+                custom_objects=custom_objects,
+            )
     elif sb3_algo == "SAC":
         if path_to_model is None:
             model = sb.SAC(

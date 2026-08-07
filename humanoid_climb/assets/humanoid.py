@@ -112,6 +112,9 @@ class Humanoid:
 
         effector = self.effectors[eff_index]
         effector_pos = effector.current_position()
+        
+        attached_to_hold = False
+
         for key in self.targets:
             if hasattr(self, "valid_targets") and key not in self.valid_targets[eff_index]:
                 continue
@@ -131,7 +134,21 @@ class Humanoid:
                     force=5000,
                     attach_pos=effector_pos,
                 )
+                attached_to_hold = True
                 break
+
+        # Smearing fallback
+        if not attached_to_hold and eff_index >= 2 and hasattr(self, "wall_id"):
+            cp = self._p.getClosestPoints(
+                self.wall_id, self.robot, 1.0, -1, effector.bodyPartIndex
+            )
+            if len(cp) > 0 and cp[0][8] < 0.0:
+                self.force_attach(
+                    eff_index=eff_index,
+                    target_key="wall",
+                    force=250,  # Weak constraint for smearing
+                    attach_pos=effector_pos,
+                )
 
             # dist = np.linalg.norm(np.array(eff_pos) - np.array(target.pos))
             # if dist < 0.1:
@@ -143,7 +160,10 @@ class Humanoid:
         if constraint != -1:  # if already attached, de-attach
             self.detach(eff_index)
 
-        target = self.targets[target_key]
+        if target_key == "wall":
+            target_id = self.wall_id
+        else:
+            target_id = self.targets[target_key].id
 
         if attach_pos is None:
             attach_pos = [0, 0, 0]
@@ -154,7 +174,7 @@ class Humanoid:
         constraint = self._p.createConstraint(
             parentBodyUniqueId=self.robot,
             parentLinkIndex=eff_part.bodyPartIndex,
-            childBodyUniqueId=target.id,
+            childBodyUniqueId=target_id,
             childLinkIndex=-1,
             jointType=p.JOINT_POINT2POINT,
             jointAxis=[0, 0, 0],

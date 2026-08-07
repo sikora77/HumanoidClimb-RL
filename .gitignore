@@ -12,3 +12,4 @@ wandb/
 isaac_gym/.vscode/
 .vscode/
 _private/
+test_*

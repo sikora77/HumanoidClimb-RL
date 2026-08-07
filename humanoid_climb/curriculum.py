@@ -22,7 +22,7 @@ class Curriculum:
         
         # Filter for 0 angle routes
         df_zero = df[df['angle'] == 0].copy()
-        df_zero = df_zero.sort_values(by=['difficulty']).reset_index(drop=True)
+        df_zero = df_zero.sort_values(by=['difficulty', 'name']).reset_index(drop=True)
         
         self.scaling_steps = scaling_steps
         self.initial_percentile = initial_difficulty_percentile
