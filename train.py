@@ -238,6 +238,7 @@ def train(
             model = sb.PPO(
                 "MlpPolicy",
                 vec_env,
+                learning_rate=1e-3,
                 verbose=1,
                 device=device_obj,
                 tensorboard_log=log_dir,
@@ -251,6 +252,7 @@ def train(
             model = sb.SAC(
                 "MlpPolicy",
                 vec_env,
+                learning_rate=3e-4,  # <-- Change the learning rate here!
                 verbose=1,
                 device=device_obj,
                 tensorboard_log=log_dir,

@@ -81,16 +81,8 @@ class HumanoidClimbEnv(gym.Env):
         self.num_states = len(board_cfg["states"])
         self.include_wall = train_cfg["include_wall_state"]
         self.one_hot = train_cfg["one_hot_encoded"]
+        self.num_closest_holds = 15
 
-        if self.include_wall:
-            if self.one_hot:
-                self.wall_state_dim = (
-                    self.kilter_rows * self.kilter_cols * self.num_states
-                )
-            else:
-                self.wall_state_dim = self.kilter_rows * self.kilter_cols
-        else:
-            self.wall_state_dim = 0
         # ----------------------------------------
 
         self.init_from_state = not state_file is None
@@ -107,13 +99,14 @@ class HumanoidClimbEnv(gym.Env):
         self.grasp_reward = grasp_reward
         self.grasp_attach_bonus = 5.0
         self.grasp_wrong_attach_penalty = -1.0
-        self.grasp_waste_penalty = -0.05
+        self.grasp_waste_penalty = 0.0
         self.grasp_premature_release_penalty = -20.0
         self._prev_attached = [-1, -1, -1, -1]
 
         self.grasp_persist_steps = grasp_persist_steps
         self._grasp_lock_remaining = [0, 0, 0, 0]
         self._last_grasp_binary = [0, 0, 0, 0]
+        self._release_intent_buffer = [0, 0, 0, 0]
 
         if self.discrete_grasp:
             self.action_space = gym.spaces.MultiDiscrete(
@@ -282,6 +275,15 @@ class HumanoidClimbEnv(gym.Env):
 
         for i in range(4):
             intent_binary = 1 if decoded[17 + i] > 0 else 0
+            
+            # Sticky Grasp Filter: require 3 consecutive releases to detach
+            if intent_binary == 0 and self._last_grasp_binary[i] == 1:
+                self._release_intent_buffer[i] += 1
+                if self._release_intent_buffer[i] < 3:
+                    intent_binary = 1
+            else:
+                self._release_intent_buffer[i] = 0
+
             if self._grasp_lock_remaining[i] > 0:
                 intent_binary = self._last_grasp_binary[i]
                 self._grasp_lock_remaining[i] -= 1
@@ -291,6 +293,9 @@ class HumanoidClimbEnv(gym.Env):
             ):
                 self._last_grasp_binary[i] = intent_binary
                 self._grasp_lock_remaining[i] = self.grasp_persist_steps - 1
+            else:
+                self._last_grasp_binary[i] = intent_binary
+                
             decoded[17 + i] = 1.0 if intent_binary == 1 else -1.0
 
         return decoded
@@ -309,7 +314,11 @@ class HumanoidClimbEnv(gym.Env):
             new_attach = was == -1 and now != -1
             new_release = was != -1 and now == -1
             if new_attach:
-                bonus += self.grasp_attach_bonus
+                if now not in self.touched_holds:
+                    bonus += 15.0 if i >= 2 else 10.0  # +15 for feet, +10 for hands
+                    self.touched_holds.add(now)
+                else:
+                    bonus += self.grasp_attach_bonus  # Small bonus for re-attaching
             elif grasp_on and now == -1:
                 bonus += self.grasp_waste_penalty
             if new_release and v_z < 0 and n_attached_after < 2:
@@ -376,10 +385,25 @@ class HumanoidClimbEnv(gym.Env):
         # Lock hands for initial 30 steps so climber has a stable start window
         self._grasp_lock_remaining = [30, 30, 0, 0]
         self._last_grasp_binary = [1, 1, -1, -1]
+        self._release_intent_buffer = [0, 0, 0, 0]
         self.current_stance = [-1, -1, -1, -1]
 
         self._build_route()
         self.climber.targets = self.targets
+        
+        # Populate valid targets for each limb (prevent hands on footholds)
+        grid_mapping = getattr(self.config, "hold_grid_mapping", {})
+        self.climber.valid_targets = [set(), set(), set(), set()]
+        for key in self.targets:
+            hold_type = grid_mapping.get(key, {}).get("type", 0)
+            is_foot = (hold_type == FOOT_ROLE or hold_type == 15)
+            
+            if not is_foot:
+                self.climber.valid_targets[0].add(key)
+                self.climber.valid_targets[1].add(key)
+                
+            self.climber.valid_targets[2].add(key)
+            self.climber.valid_targets[3].add(key)
 
         self._spawn_on_start_holds()
 
@@ -399,7 +423,11 @@ class HumanoidClimbEnv(gym.Env):
         self.update_stance()
 
         self.prevheight = self.get_com_height()
+        self.max_height = self.prevheight
         self.previous_height = self.prevheight
+        self.initial_height = self.prevheight
+        
+        self.touched_holds = set([h for h in self.current_stance if h != -1])
 
         ob = self._get_obs()
         info = self._get_info()
@@ -408,11 +436,56 @@ class HumanoidClimbEnv(gym.Env):
 
     def calculate_reward_negative_distance(self):
         com_height = self.get_com_height()
-        height_reward = max(0, com_height - self.prevheight) * 10
-        self.prevheight = com_height
+        
+        height_reward = 0.0
+        if com_height > self.max_height:
+            height_reward = (com_height - self.max_height) * 50.0  # Buffed one-time reward
+            self.max_height = com_height
 
         reward = height_reward
-        if self.is_on_floor():
+        
+        # Continuous upward incentive
+        passive_height_reward = max(0, com_height - self.initial_height) * 0.1
+        reward += passive_height_reward
+        
+        # Energy Penalty for arms
+        arm_actions = self.climber.current_body_actions[11:17]
+        energy_penalty = np.sum(np.abs(arm_actions)) * 0.01  # small penalty
+        reward -= energy_penalty
+        
+        # Proximity Reward for unattached limbs
+        proximity_reward = 0.0
+        effector_positions = [eff.current_position() for eff in self.climber.effectors]
+        
+        for i in range(4):
+            if self.current_stance[i] != -1:  # If limb is attached
+                if i >= 2:  # Feet
+                    reward += 0.25  # Massive continuous reward for standing on a hold
+            else:  # If limb is unattached
+                min_dist = float('inf')
+                limb_pos = np.array(effector_positions[i])
+                
+                # Find closest hold not currently being grabbed
+                for key, target in self.targets.items():
+                    if key not in self.current_stance:
+                        target_pos = np.array(target.body.get_position())
+                        
+                        # Foot Proximity Filter: only target holds below the COM
+                        if i >= 2 and target_pos[2] > com_height:
+                            continue
+                            
+                        dist = np.linalg.norm(target_pos - limb_pos)
+                        if dist < min_dist:
+                            min_dist = dist
+                            
+                if min_dist != float('inf'):
+                    proximity_reward += max(0, 1.5 - min_dist) * 0.1  # Gravity well
+                    
+        reward += proximity_reward
+        
+        if not self.is_on_floor():
+            reward += 0.05
+        else:
             reward -= 10
 
         return reward
@@ -615,44 +688,35 @@ class HumanoidClimbEnv(gym.Env):
         if not self.include_wall:
             return baseline_vector
 
-        if self.one_hot:
-            grid_state = np.zeros(
-                (self.kilter_rows, self.kilter_cols, self.num_states),
-                dtype=np.float32,
-            )
-            grid_state[:, :, 0] = 1.0
-            for key in self.targets:
-                if (
-                    hasattr(self.config, "hold_grid_mapping")
-                    and key in self.config.hold_grid_mapping
-                ):
-                    r = self.config.hold_grid_mapping[key]["row"]
-                    c = self.config.hold_grid_mapping[key]["col"]
-                    state_idx = self.config.hold_grid_mapping[key].get(
-                        "type", 0
-                    )
-                    if state_idx >= self.num_states:
-                        state_idx = 0
-                    grid_state[r, c, 0] = 0.0
-                    grid_state[r, c, state_idx] = 1.0
-            flat_wall = grid_state.flatten()
-        else:
-            grid_state = np.zeros(
-                (self.kilter_rows, self.kilter_cols), dtype=np.float32
-            )
-            for key in self.targets:
-                if (
-                    hasattr(self.config, "hold_grid_mapping")
-                    and key in self.config.hold_grid_mapping
-                ):
-                    r = self.config.hold_grid_mapping[key]["row"]
-                    c = self.config.hold_grid_mapping[key]["col"]
-                    grid_state[r, c] = self.config.hold_grid_mapping[key].get(
-                        "type", 0
-                    )
-            flat_wall = grid_state.flatten()
-
-        return np.concatenate([baseline_vector, flat_wall]).astype(np.float32)
+        # Egocentric Hold Observation
+        torso_pos = np.array(self.climber.robot_body.current_position())
+        
+        holds_info = []
+        for key in self.targets:
+            hold_asset = self.targets[key]
+            hold_pos = np.array(hold_asset.body.get_position())
+            dist = np.linalg.norm(hold_pos - torso_pos)
+            
+            hold_type = 0
+            if hasattr(self.config, "hold_grid_mapping") and key in self.config.hold_grid_mapping:
+                hold_type = self.config.hold_grid_mapping[key].get("type", 0)
+                
+            dx, dy, dz = hold_pos - torso_pos
+            holds_info.append((dist, dx, dy, dz, hold_type))
+            
+        # Sort by distance and pick the closest N holds
+        holds_info.sort(key=lambda x: x[0])
+        closest_holds = holds_info[:self.num_closest_holds]
+        
+        # Pad with zeros if there are fewer holds than self.num_closest_holds
+        while len(closest_holds) < self.num_closest_holds:
+            closest_holds.append((0.0, 0.0, 0.0, 0.0, 0))
+            
+        # Append relative coordinates and hold type to the observation
+        for hold in closest_holds:
+            obs.extend([hold[1], hold[2], hold[3], float(hold[4])])
+            
+        return np.array(obs, dtype=np.float32)
 
     def _get_info(self):
         info = {}

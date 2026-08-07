@@ -53,6 +53,8 @@ class Humanoid:
         self.effectors = [self.parts[k] for k in config["end_effectors"]]
         self.effector_attached_to = [-1 for k in config["end_effectors"]]
         self.effector_constraints = [-1 for i in range(len(self.effectors))]
+        
+        self.current_body_actions = np.zeros(len(self.motors))
 
         collision_groups = config["collision_groups"]
 
@@ -79,6 +81,8 @@ class Humanoid:
         # Grasping actions are the last x elements of the array, where x is the number of end-effectors
         body_actions = a[0 : len(self.motors)]
         grasp_actions = a[-len(self.effectors) :]
+        
+        self.current_body_actions = np.copy(body_actions)
 
         if override is not None:
             for i in range(len(override)):
@@ -109,6 +113,9 @@ class Humanoid:
         effector = self.effectors[eff_index]
         effector_pos = effector.current_position()
         for key in self.targets:
+            if hasattr(self, "valid_targets") and key not in self.valid_targets[eff_index]:
+                continue
+                
             target = self.targets[key]
             cp = self._p.getClosestPoints(
                 target.id, self.robot, 1.0, -1, effector.bodyPartIndex
