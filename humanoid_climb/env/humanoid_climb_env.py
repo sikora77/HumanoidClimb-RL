@@ -167,6 +167,11 @@ class HumanoidClimbEnv(gym.Env):
         )
 
     def _build_route(self):
+        # Performance fix: Don't rebuild PyBullet bodies if the route hasn't changed!
+        if hasattr(self, "_last_built_route") and hasattr(self, "targets") and len(self.targets) > 0:
+            if self.current_route_info == self._last_built_route:
+                return
+
         if hasattr(self, "targets") and self.targets:
             for key in list(self.targets.keys()):
                 self._p.removeBody(self.targets[key].id)
@@ -200,6 +205,8 @@ class HumanoidClimbEnv(gym.Env):
                 "col": min(11, int((144 - hx) // 12)),
                 "type": role,
             }
+
+        self._last_built_route = route
 
     def get_com_height(self):
         parts = self.climber.parts
@@ -479,12 +486,12 @@ class HumanoidClimbEnv(gym.Env):
 
         self._spawn_on_start_holds()
 
-        # 100-step calming phase: damp base velocity and apply zero action to reach static equilibrium
+        # 20-step calming phase: damp base velocity and apply zero action to reach static equilibrium
         # Make sure grasp commands keep hands attached (17, 18) and feet attached (19, 20) during reset
         calm_action = np.zeros(self.action_space.shape, dtype=np.float32)
         calm_action[17:21] = 1.0
 
-        for _ in range(100):
+        for _ in range(20):
             self.climber.apply_action(calm_action)
             self._p.resetBaseVelocity(
                 self.climber.robot, [0, 0, 0], [0, 0, 0]
@@ -531,17 +538,29 @@ class HumanoidClimbEnv(gym.Env):
             
         reward -= energy_penalty
         
-        # Action Rate Penalty (Smoothness)
-        if hasattr(self, 'action_rate_penalty'):
-            reward -= self.action_rate_penalty
+        # Action Rate Penalty (Smoothness) - Disabled for now to allow jitter!
+        # if hasattr(self, 'action_rate_penalty'):
+        #     reward -= self.action_rate_penalty
             
-        # Hand Reach Incentive: Small reward for hands above head
-        # This explicitly forces the agent to release the start holds and reach UP!
+        # Stagnation Penalty: Penalize the agent if it doesn't move enough
+        # This encourages exploratory jitter!
+        total_angular_velocity = 0.0
+        for joint in self.climber.motors:
+            state = self._p.getJointState(joint.bodies[joint.bodyIndex], joint.jointIndex)
+            total_angular_velocity += abs(state[1])
+            
+        if total_angular_velocity < 10.0:  # If the sum of all joint velocities is very low
+            reward -= 0.1  # Small penalty for standing still
+            
+        # Hand Reach Incentive: Small reward for hands and elbows above head
+        # This explicitly forces the agent to fully reach UP!
         effector_positions = [eff.current_position() for eff in self.climber.effectors]
         head_z = com_height + 0.4  # Approximate head height relative to COM
+        arm_parts = ["left_lower_arm", "right_lower_arm"]
         for i in range(2): # Left and Right Hand
             hand_z = effector_positions[i][2]
-            if hand_z > head_z:
+            elbow_z = self.climber.parts[arm_parts[i]].current_position()[2]
+            if hand_z > head_z and elbow_z > head_z:
                 reward += 0.1
         
         # Proximity Reward for unattached limbs
@@ -575,7 +594,7 @@ class HumanoidClimbEnv(gym.Env):
         reward += proximity_reward
         
         if self.is_on_floor():
-            reward -= 1000.0
+            reward -= 5.0
 
         return reward
 
