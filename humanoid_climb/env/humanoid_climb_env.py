@@ -137,7 +137,7 @@ class HumanoidClimbEnv(gym.Env):
         self.wall = Asset(self._p, self.config.surface)
         self.climber = Humanoid(self._p, self.config.climber)
         self.climber.wall_id = self.wall.id
-        
+
         self.prevheight = self.get_com_height()
 
         self.debug_stance_text = self._p.addUserDebugText(
@@ -149,14 +149,14 @@ class HumanoidClimbEnv(gym.Env):
         )
 
         self.targets = {}
-        
+
         if self.curriculum is not None:
             route_index = 0
             if len(self.curriculum.routes) > 0:
                 self.current_route_info = self.curriculum.routes[route_index]
             else:
                 self.current_route_info = self.curriculum.get_random_route()
-                
+
         self._build_route()
         self.climber.targets = self.targets
 
@@ -168,7 +168,11 @@ class HumanoidClimbEnv(gym.Env):
 
     def _build_route(self):
         # Performance fix: Don't rebuild PyBullet bodies if the route hasn't changed!
-        if hasattr(self, "_last_built_route") and hasattr(self, "targets") and len(self.targets) > 0:
+        if (
+            hasattr(self, "_last_built_route")
+            and hasattr(self, "targets")
+            and len(self.targets) > 0
+        ):
             if self.current_route_info == self._last_built_route:
                 return
 
@@ -279,18 +283,21 @@ class HumanoidClimbEnv(gym.Env):
 
         # Spawn Feet on Footholds
         foot_keys = [
-            k for k, v in grid_mapping.items() if v.get("type") == FOOT_ROLE or v.get("type") == 15
+            k
+            for k, v in grid_mapping.items()
+            if v.get("type") == FOOT_ROLE or v.get("type") == 15
         ]
         if len(foot_keys) < 2:
             sorted_all_holds = sorted(
                 [k for k in self.targets.keys() if k not in start_keys],
-                key=lambda k: self.targets[k].body.initialPosition[2]
+                key=lambda k: self.targets[k].body.initialPosition[2],
             )
             foot_keys = sorted_all_holds[:2]
 
         if len(foot_keys) >= 2:
             sorted_foot_keys = sorted(
-                foot_keys, key=lambda k: self.targets[k].body.initialPosition[1]
+                foot_keys,
+                key=lambda k: self.targets[k].body.initialPosition[1],
             )
             # Right foot (index 3) -> lowest Y
             rf_key = sorted_foot_keys[0]
@@ -321,7 +328,7 @@ class HumanoidClimbEnv(gym.Env):
             # For continuous space, 0.0 is the natural midpoint.
             # > 0.0 means hold, <= 0.0 means release.
             intent_binary = 1 if decoded[17 + i] > 0.0 else 0
-            
+
             # Sticky Grasp Filter: require 3 consecutive releases to detach
             if intent_binary == 0 and self._last_grasp_binary[i] == 1:
                 self._release_intent_buffer[i] += 1
@@ -341,7 +348,7 @@ class HumanoidClimbEnv(gym.Env):
                 self._grasp_lock_remaining[i] = self.grasp_persist_steps - 1
             else:
                 self._last_grasp_binary[i] = intent_binary
-                
+
             decoded[17 + i] = 1.0 if intent_binary == 1 else -1.0
 
         return decoded
@@ -361,10 +368,14 @@ class HumanoidClimbEnv(gym.Env):
             new_release = was != -1 and now == -1
             if new_attach and now != "wall":
                 if now not in self.touched_holds:
-                    bonus += 15.0 if i >= 2 else 10.0  # +15 for feet, +10 for hands
+                    bonus += (
+                        150.0 if i >= 2 else 120.0
+                    )  # +50 for feet, +40 for hands
                     self.touched_holds.add(now)
                 else:
-                    bonus += self.grasp_attach_bonus  # Small bonus for re-attaching
+                    bonus += (
+                        self.grasp_attach_bonus
+                    )  # Small bonus for re-attaching
             elif grasp_on and now == -1:
                 bonus += self.grasp_waste_penalty
             if new_release and v_z < 0 and n_attached_after < 2:
@@ -374,9 +385,9 @@ class HumanoidClimbEnv(gym.Env):
     def step(self, action):
         prev_attached = list(self.climber.effector_attached_to)
         decoded_action = self._decode_action(action)
-        
+
         # Action Rate Penalty (smoothness constraint)
-        if hasattr(self, 'prev_action'):
+        if hasattr(self, "prev_action"):
             action_delta = np.sum(np.square(action - self.prev_action))
             self.action_rate_penalty = action_delta * 0.005
         else:
@@ -384,7 +395,7 @@ class HumanoidClimbEnv(gym.Env):
         self.prev_action = action.copy()
 
         # Action Interpolation (B-Spline / Linear Smoothing)
-        if hasattr(self, 'prev_decoded_action'):
+        if hasattr(self, "prev_decoded_action"):
             start_action = self.prev_decoded_action
         else:
             start_action = decoded_action
@@ -394,9 +405,11 @@ class HumanoidClimbEnv(gym.Env):
         for i in range(4):
             # Linearly interpolate action to reduce jerk
             interp_factor = (i + 1) / 4.0
-            interp_action = start_action + interp_factor * (decoded_action - start_action)
+            interp_action = start_action + interp_factor * (
+                decoded_action - start_action
+            )
             self.climber.apply_action(interp_action)
-            
+
             self._p.stepSimulation()
             self.total_env_steps += 1
 
@@ -451,7 +464,7 @@ class HumanoidClimbEnv(gym.Env):
 
         self.climber.reset()
         self.steps = 0
-        self.best_limb_dist = [float('inf')] * 4
+        self.best_limb_dist = [float("inf")] * 4
         # Lock all limbs for initial 30 steps so climber has a stable start window
         self._grasp_lock_remaining = [30, 30, 30, 30]
         self._last_grasp_binary = [1, 1, 1, 1]
@@ -465,22 +478,22 @@ class HumanoidClimbEnv(gym.Env):
                 self.current_route_info = self.curriculum.routes[route_index]
             else:
                 self.current_route_info = self.curriculum.get_random_route()
-                
+
         self._build_route()
-        
+
         self.climber.targets = self.targets
-        
+
         # Populate valid targets for each limb (prevent hands on footholds)
         grid_mapping = getattr(self.config, "hold_grid_mapping", {})
         self.climber.valid_targets = [set(), set(), set(), set()]
         for key in self.targets:
             hold_type = grid_mapping.get(key, {}).get("type", 0)
-            is_foot = (hold_type == FOOT_ROLE or hold_type == 15)
-            
+            is_foot = hold_type == FOOT_ROLE or hold_type == 15
+
             if not is_foot:
                 self.climber.valid_targets[0].add(key)
                 self.climber.valid_targets[1].add(key)
-                
+
             self.climber.valid_targets[2].add(key)
             self.climber.valid_targets[3].add(key)
 
@@ -504,7 +517,7 @@ class HumanoidClimbEnv(gym.Env):
         self.max_height = self.prevheight
         self.previous_height = self.prevheight
         self.initial_height = self.prevheight
-        
+
         self.touched_holds = set([h for h in self.current_stance if h != -1])
 
         ob = self._get_obs()
@@ -514,18 +527,33 @@ class HumanoidClimbEnv(gym.Env):
 
     def calculate_reward_negative_distance(self):
         com_height = self.get_com_height()
-        
+
+        # Prevent "gymnast swinging" exploit:
+        # Only grant height rewards if at least one foot is attached to a hold or smearing on the wall.
+        # This forces the agent to use its legs to climb rather than swinging them to manipulate COM height.
+        has_foot_attached = (self.current_stance[2] != -1) or (
+            self.current_stance[3] != -1
+        )
+
         height_reward = 0.0
         if com_height > self.max_height:
-            height_reward = (com_height - self.max_height) * 50.0  # Buffed one-time reward
+            if has_foot_attached:
+                height_reward = (
+                    com_height - self.max_height
+                ) * 50.0  # Buffed one-time reward
+            # Always update max_height so swinging wastes height potential without granting points
             self.max_height = com_height
 
         reward = height_reward
-        
-        # Continuous upward incentive
-        passive_height_reward = max(0, com_height - self.initial_height) * 0.1
+
+        # Continuous upward incentive (Reward for current height)
+        passive_height_reward = max(0, com_height - self.initial_height) * 0.5
+        if not has_foot_attached:
+            passive_height_reward /= (
+                3  # Greatly reduce continuous reward if dangling
+            )
         reward += passive_height_reward
-        
+
         # Biomechanical Energy Penalty (Disabled for early training)
         # We completely remove this to prevent the agent from letting its arms dangle
         # to avoid the massive power penalty of lifting them against gravity.
@@ -535,64 +563,104 @@ class HumanoidClimbEnv(gym.Env):
         #     angular_velocity = state[1]
         #     applied_torque = state[3]
         #     energy_penalty += abs(angular_velocity * applied_torque) * 0.0005
-            
+
         reward -= energy_penalty
-        
+
         # Action Rate Penalty (Smoothness) - Disabled for now to allow jitter!
         # if hasattr(self, 'action_rate_penalty'):
         #     reward -= self.action_rate_penalty
-            
-        # Stagnation Penalty: Penalize the agent if it doesn't move enough
-        # This encourages exploratory jitter!
-        total_angular_velocity = 0.0
-        for joint in self.climber.motors:
-            state = self._p.getJointState(joint.bodies[joint.bodyIndex], joint.jointIndex)
-            total_angular_velocity += abs(state[1])
-            
-        if total_angular_velocity < 10.0:  # If the sum of all joint velocities is very low
-            reward -= 0.1  # Small penalty for standing still
-            
+
+        # Stagnation Penalty: Penalize the agent if it isn't making vertical progress
+        # Joint twitching is no longer enough to avoid this penalty!
+        if hasattr(self, "last_com_heights"):
+            self.last_com_heights.append(com_height)
+            if len(self.last_com_heights) > 100:
+                self.last_com_heights.pop(0)
+
+            # If the COM hasn't moved up by at least 5cm in the last 100 steps
+            if max(self.last_com_heights) - min(self.last_com_heights) < 0.05:
+                reward -= 0.1
+        else:
+            self.last_com_heights = [com_height]
+
         # Hand Reach Incentive: Small reward for hands and elbows above head
         # This explicitly forces the agent to fully reach UP!
-        effector_positions = [eff.current_position() for eff in self.climber.effectors]
+        effector_positions = [
+            eff.current_position() for eff in self.climber.effectors
+        ]
         head_z = com_height + 0.4  # Approximate head height relative to COM
         arm_parts = ["left_lower_arm", "right_lower_arm"]
-        for i in range(2): # Left and Right Hand
+        for i in range(2):  # Left and Right Hand
             hand_z = effector_positions[i][2]
             elbow_z = self.climber.parts[arm_parts[i]].current_position()[2]
-            if hand_z > head_z and elbow_z > head_z:
-                reward += 0.1
-        
+
+            # To prevent the "chicken wing", the hand MUST be higher than the elbow!
+            if hand_z > head_z and elbow_z > head_z and hand_z > elbow_z:
+                # Only reward if the hand is actually detached (exploring)
+                if (
+                    self.current_stance[i] == -1
+                    or self.current_stance[i] == "wall"
+                ):
+                    reward += (
+                        0.2  # Strongly encourage reaching up while detached
+                    )
+
+        # Force feet on the wall: continuous penalty for every unattached foot
+        # This stops the agent from just dropping a leg to balance
+        feet_detached = sum(1 for i in [2, 3] if self.current_stance[i] == -1)
+        reward -= feet_detached * 0.1
+
+        # Jitter Reward for 3 Points of Contact:
+        # If exactly one limb is detached (exploring), reward angular velocity to encourage dynamic reaching/swinging!
+        num_attached = sum(
+            1 for i in range(4) if self.current_stance[i] != -1
+        )
+        if num_attached == 3:
+            total_angular_velocity = 0.0
+            for joint in self.climber.motors:
+                state = self._p.getJointState(
+                    joint.bodies[joint.bodyIndex], joint.jointIndex
+                )
+                total_angular_velocity += abs(state[1])
+            reward += total_angular_velocity * 0.002
+
         # Proximity Reward for unattached limbs
         proximity_reward = 0.0
-        effector_positions = [eff.current_position() for eff in self.climber.effectors]
-        
+        effector_positions = [
+            eff.current_position() for eff in self.climber.effectors
+        ]
+
         for i in range(4):
-            if self.current_stance[i] == -1 or self.current_stance[i] == "wall":  # If limb is unattached OR smearing
-                min_dist = float('inf')
+            if (
+                self.current_stance[i] == -1
+                or self.current_stance[i] == "wall"
+            ):  # If limb is unattached OR smearing
+                min_dist = float("inf")
                 limb_pos = np.array(effector_positions[i])
-                
+
                 # Find closest hold not currently being grabbed
                 for key, target in self.targets.items():
                     if key not in self.current_stance:
                         target_pos = np.array(target.body.get_position())
-                        
+
                         # Foot Proximity Filter: only target holds below the COM
                         if i >= 2 and target_pos[2] > com_height:
                             continue
-                            
+
                         dist = np.linalg.norm(target_pos - limb_pos)
                         if dist < min_dist:
                             min_dist = dist
-                            
-                if min_dist != float('inf'):
+
+                if min_dist != float("inf"):
                     # Progress-Based Reward Filter: Only reward if we got closer than ever before
                     if min_dist < self.best_limb_dist[i]:
                         self.best_limb_dist[i] = min_dist
-                        proximity_reward += max(0, 1.5 - min_dist) * 0.5  # High reward for new progress
-                    
+                        proximity_reward += (
+                            max(0, 1.5 - min_dist) * 0.5
+                        )  # High reward for new progress
+
         reward += proximity_reward
-        
+
         if self.is_on_floor():
             reward -= 5.0
 
@@ -798,32 +866,35 @@ class HumanoidClimbEnv(gym.Env):
 
         # Egocentric Hold Observation
         torso_pos = np.array(self.climber.robot_body.current_position())
-        
+
         holds_info = []
         for key in self.targets:
             hold_asset = self.targets[key]
             hold_pos = np.array(hold_asset.body.get_position())
             dist = np.linalg.norm(hold_pos - torso_pos)
-            
+
             hold_type = 0
-            if hasattr(self.config, "hold_grid_mapping") and key in self.config.hold_grid_mapping:
+            if (
+                hasattr(self.config, "hold_grid_mapping")
+                and key in self.config.hold_grid_mapping
+            ):
                 hold_type = self.config.hold_grid_mapping[key].get("type", 0)
-                
+
             dx, dy, dz = hold_pos - torso_pos
             holds_info.append((dist, dx, dy, dz, hold_type))
-            
+
         # Sort by distance and pick the closest N holds
         holds_info.sort(key=lambda x: x[0])
-        closest_holds = holds_info[:self.num_closest_holds]
-        
+        closest_holds = holds_info[: self.num_closest_holds]
+
         # Pad with zeros if there are fewer holds than self.num_closest_holds
         while len(closest_holds) < self.num_closest_holds:
             closest_holds.append((0.0, 0.0, 0.0, 0.0, 0))
-            
+
         # Append relative coordinates and hold type to the observation
         for hold in closest_holds:
             obs.extend([hold[1], hold[2], hold[3], float(hold[4])])
-            
+
         return np.array(obs, dtype=np.float32)
 
     def _get_info(self):

@@ -269,11 +269,11 @@ def train(
                 device=device_obj,
                 tensorboard_log=log_dir,
                 batch_size=2048,
-                ent_coef=0.08,
+                ent_coef=0.07,
                 policy_kwargs=policy_kwargs,
             )
         else:
-            custom_objects = {"ent_coef": 0.08}
+            custom_objects = {"ent_coef": 0.07}
             model = sb.PPO.load(
                 path_to_model,
                 env=vec_env,
