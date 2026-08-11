@@ -547,7 +547,9 @@ class HumanoidClimbEnv(gym.Env):
         reward = height_reward
 
         # Continuous upward incentive (Reward for current height)
-        passive_height_reward = max(0, com_height - self.initial_height) * 0.5
+        # We add a 0.3m buffer to initial_height. This ensures the agent only gets this reward 
+        # if it actually CLIMBS. Stretching its legs on the start holds is no longer enough!
+        passive_height_reward = max(0, com_height - (self.initial_height + 0.3)) * 0.5
         if not has_foot_attached:
             passive_height_reward /= (
                 3  # Greatly reduce continuous reward if dangling
